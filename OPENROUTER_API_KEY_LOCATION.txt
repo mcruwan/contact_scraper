@@ -1,0 +1,69 @@
+🔑 WHERE TO PUT YOUR OPENROUTER API KEY
+========================================
+
+OPTION 1: Environment Variable (Recommended)
+---------------------------------------------
+1. Open your terminal
+2. Run this command (replace with your actual key):
+
+   export OPENROUTER_API_KEY='sk-or-v1-your-key-here'
+
+3. To make it permanent, add this line to your ~/.zshrc or ~/.bash_profile:
+
+   echo "export OPENROUTER_API_KEY='sk-or-v1-your-key-here'" >> ~/.zshrc
+   source ~/.zshrc
+
+
+OPTION 2: Create a .env file
+-----------------------------
+1. In this directory (/Applications/MAMP/htdocs/contact_scraper/)
+2. Create a file named: .env
+3. Add this line:
+
+   OPENROUTER_API_KEY=sk-or-v1-your-key-here
+
+
+GETTING YOUR API KEY
+--------------------
+1. Visit: https://openrouter.ai
+2. Sign up (free)
+3. Go to: https://openrouter.ai/keys
+4. Click "Create Key"
+5. Copy the key (starts with sk-or-v1-...)
+
+
+TESTING IT WORKS
+----------------
+After setting your key, test it:
+
+   python3 ai_extractor.py
+
+You should see: "✓ AI extraction enabled using model: ..."
+
+
+USAGE
+-----
+Once configured, AI extraction works automatically:
+
+   # Command line
+   python3 oxylabs_integration.py https://university.edu/ 20
+
+   # Web interface
+   python3 app.py
+   # Then open: http://localhost:5000
+
+
+COSTS (Very Cheap!)
+-------------------
+- 100 emails scraped: ~$0.004
+- 1,000 emails scraped: ~$0.04
+- 10,000 emails scraped: ~$0.40
+
+Most of the time, names are found for free using heuristics.
+AI is only used as a smart fallback (about 40% of the time).
+
+
+QUESTIONS?
+----------
+Read the full guide: AI_EXTRACTION_SETUP.md
+
