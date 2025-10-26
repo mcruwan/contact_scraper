@@ -1,0 +1,79 @@
+================================================================================
+University Contact Scraper - Usage Examples
+================================================================================
+
+BASIC USAGE
+-----------
+1. Scrape a single page and all linked pages:
+   python run.py https://example.edu/contacts
+
+2. Scrape with page limit:
+   python run.py https://example.edu/staff --max-pages 25
+
+3. Scrape with depth limit:
+   python run.py https://example.edu/faculty --max-depth 2
+
+4. Custom output filename:
+   python run.py https://example.edu/directory --output my_contacts
+
+
+ADVANCED USAGE
+--------------
+1. Limit pages and depth, custom output:
+   python run.py https://example.edu/people --max-pages 50 --max-depth 3 --output contacts_2024
+
+2. Restrict to specific domain:
+   python run.py https://example.edu/contacts --domain example.edu
+
+3. Large scraping job with limits:
+   python run.py https://example.edu --max-pages 200 --max-depth 4
+
+
+USING SCRAPY DIRECTLY
+---------------------
+For advanced users who want more control:
+
+1. Basic run:
+   scrapy crawl contact_spider -a start_url=https://example.edu/contacts
+
+2. Save to specific file:
+   scrapy crawl contact_spider -a start_url=https://example.edu -O results.csv
+
+3. Debug mode:
+   scrapy crawl contact_spider -a start_url=https://example.edu --loglevel=DEBUG
+
+4. With specific domain restriction:
+   scrapy crawl contact_spider -a start_url=https://example.edu -a allowed_domain=example.edu
+
+
+TYPICAL WORKFLOW
+----------------
+1. Start with a small test:
+   python run.py https://example.edu/contacts --max-pages 5
+
+2. Review the output in output/ directory
+
+3. If results look good, run full scrape:
+   python run.py https://example.edu/contacts --max-pages 100
+
+4. Open contacts_TIMESTAMP.csv in Excel or import JSON for analysis
+
+
+TIPS
+----
+- Always test with --max-pages 5-10 first
+- Check output/ directory for CSV and JSON files
+- Review logs for any errors or warnings
+- Be respectful: don't set max-pages too high
+- If scraping fails, check robots.txt: https://example.edu/robots.txt
+- Adjust selectors in contact_spider.py for your specific website
+
+
+OUTPUT LOCATION
+---------------
+All results are saved in the output/ directory:
+- CSV files: Easy to open in Excel/Google Sheets
+- JSON files: For programmatic processing
+
+Files are named with timestamps to avoid overwriting.
+

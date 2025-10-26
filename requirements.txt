@@ -1,0 +1,15 @@
+# University Contact Scraper - Python Dependencies
+
+# Core scraping
+requests>=2.31.0
+beautifulsoup4>=4.12.0
+lxml>=4.9.0
+
+# Web interface
+flask>=3.0.0
+
+# Parallel processing
+# (concurrent.futures is built-in)
+
+# JSON handling
+# (json is built-in)
