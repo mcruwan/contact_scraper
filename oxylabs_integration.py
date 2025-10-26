@@ -15,13 +15,22 @@ from scrapy.crawler import CrawlerProcess
 from scrapy.utils.project import get_project_settings
 from uni_scraper.spiders.contact_spider import ContactSpider
 
+# Import AI extraction (optional)
+try:
+    from ai_extractor import AIContactExtractor
+    AI_AVAILABLE = True
+except ImportError:
+    AI_AVAILABLE = False
+    print("⚠️  AI extraction not available (ai_extractor.py not found)")
+
 
 class OxylabsScraper:
     """
     Oxylabs Web Scraper API integration for bypassing anti-bot protection.
+    Now with AI-powered contact extraction!
     """
     
-    def __init__(self, username, password):
+    def __init__(self, username, password, use_ai=True, ai_model="openai/gpt-4o-mini"):
         self.username = username
         self.password = password
         self.base_url = "https://realtime.oxylabs.io/v1/queries"
@@ -30,6 +39,24 @@ class OxylabsScraper:
             "Authorization": f"Basic {self.auth_string}",
             "Content-Type": "application/json"
         }
+        
+        # Initialize AI extractor
+        self.use_ai = use_ai and AI_AVAILABLE
+        self.ai_extractor = None
+        self.ai_extractions_count = 0
+        self.ai_success_count = 0
+        
+        if self.use_ai:
+            try:
+                self.ai_extractor = AIContactExtractor(model=ai_model)
+                if self.ai_extractor.enabled:
+                    print(f"✓ AI-powered extraction enabled with {ai_model}")
+                else:
+                    self.use_ai = False
+                    print("⚠️  AI extraction disabled: No API key configured")
+            except Exception as e:
+                self.use_ai = False
+                print(f"⚠️  AI extraction disabled: {e}")
     
     def scrape_url(self, url, render_js=True, country="us"):
         """
@@ -209,7 +236,7 @@ class OxylabsScraper:
     def extract_contact_from_context(self, email_element, email, source_url, soup):
         """
         ENHANCED: Extract contact details by analyzing context around an email link.
-        Uses multiple strategies to find names, designations, and phone numbers.
+        Uses multiple strategies including AI-powered extraction as fallback.
         """
         import re
         
@@ -273,6 +300,47 @@ class OxylabsScraper:
                         text = tag.get_text(strip=True)
                         if text and self.looks_like_designation(text):
                             contact['designation'] = text
+        
+        # Strategy 3: AI-powered extraction (if enabled and heuristics found insufficient data)
+        if self.use_ai and self.ai_extractor:
+            # Use AI if we have email but missing name, or if name looks suspicious
+            needs_ai = (
+                not contact.get('name') or 
+                '@' in (contact.get('name') or '') or
+                len(contact.get('name') or '') < 3
+            )
+            
+            if needs_ai:
+                try:
+                    # Get HTML context (parent with more context)
+                    context_element = email_element
+                    for _ in range(2):  # Go up 2 levels for better context
+                        parent = context_element.find_parent()
+                        if parent:
+                            context_element = parent
+                    
+                    html_context = str(context_element)[:4000]  # Limit size
+                    
+                    # Call AI extraction
+                    self.ai_extractions_count += 1
+                    ai_result = self.ai_extractor.extract_contact_info(html_context, email)
+                    
+                    # Use AI results to fill missing fields
+                    if ai_result:
+                        if ai_result.get('name') and not contact.get('name'):
+                            contact['name'] = ai_result['name']
+                            self.ai_success_count += 1
+                        if ai_result.get('designation') and not contact.get('designation'):
+                            contact['designation'] = ai_result['designation']
+                        if ai_result.get('phone') and not contact.get('phone'):
+                            contact['phone'] = ai_result['phone']
+                        if ai_result.get('department') and not contact.get('department'):
+                            contact['department'] = ai_result['department']
+                        
+                        print(f"  ✓ AI extracted: {ai_result.get('name', 'N/A')}")
+                    
+                except Exception as e:
+                    print(f"  ⚠️  AI extraction failed: {e}")
         
         return contact if contact.get('email') else None
     
@@ -553,6 +621,30 @@ class OxylabsScraper:
         print(f"\n{'='*70}")
         print(f"Scraping completed in {elapsed_time:.2f} seconds")
         print(f"Average: {elapsed_time/total_urls:.2f} seconds per URL")
+        
+        # Show AI extraction statistics with actual usage
+        if self.use_ai and self.ai_extractions_count > 0:
+            print(f"\n{'='*70}")
+            print(f"AI EXTRACTION STATISTICS")
+            print(f"{'='*70}")
+            print(f"  Model: {self.ai_extractor.model}")
+            print(f"  Total AI calls: {self.ai_extractions_count}")
+            print(f"  Successful extractions: {self.ai_success_count}")
+            print(f"  Success rate: {(self.ai_success_count/self.ai_extractions_count*100):.1f}%")
+            
+            # Get actual usage stats from AI extractor
+            if self.ai_extractor:
+                usage_stats = self.ai_extractor.get_usage_stats()
+                print(f"\nToken Usage:")
+                print(f"  Input tokens: {usage_stats['input_tokens']:,}")
+                print(f"  Output tokens: {usage_stats['output_tokens']:,}")
+                print(f"  Total tokens: {usage_stats['total_tokens']:,}")
+                print(f"  Avg tokens/request: {usage_stats['avg_tokens_per_request']:.1f}")
+                print(f"\nActual Cost: ${usage_stats['total_cost']:.6f}")
+                print(f"  (≈ ${usage_stats['total_cost']*1000:.3f} per 1000 extractions)")
+            
+            print(f"{'='*70}")
+        
         print(f"{'='*70}")
         
         # Phase 1: Save raw data to JSON (with duplicates)
@@ -830,15 +922,17 @@ def discover_urls_by_patterns(start_url, base_domain, discovered_urls):
     return pattern_urls
 
 
-def discover_urls(start_url, max_pages=20, max_discovery=2000, enable_deep_crawl=False, deep_crawl_requests=50):
+def discover_urls(start_url, max_pages=20, max_discovery=2000, enable_deep_crawl=False, deep_crawl_requests=50, enable_ai_url_filter=False, ai_extractor=None):
     """
     Enhanced URL discovery with multiple methods:
     1. Sitemap.xml discovery (most comprehensive)
     2. Pattern-based discovery (staff/faculty directories)
     3. Deep crawling (OPTIONAL - controlled by enable_deep_crawl parameter)
+    4. AI URL prioritization (OPTIONAL - uses AI to filter likely contact pages)
     
     Phase 1: Discover ALL URLs up to max_discovery limit
     Phase 2: Prioritize and return top max_pages URLs
+    Phase 3: AI filtering (optional) - Analyze medium-confidence URLs
     
     Args:
         start_url: The starting URL to discover from
@@ -846,6 +940,8 @@ def discover_urls(start_url, max_pages=20, max_discovery=2000, enable_deep_crawl
         max_discovery: Maximum total URLs to discover (default: 2000)
         enable_deep_crawl: Whether to enable deep crawling (default: False)
         deep_crawl_requests: Number of API requests for deep crawling (default: 50)
+        enable_ai_url_filter: Whether to use AI to prioritize URLs (default: False)
+        ai_extractor: Optional AIContactExtractor instance (for shared stats tracking)
     """
     from urllib.parse import urljoin, urlparse
     import requests
@@ -1132,15 +1228,113 @@ def discover_urls(start_url, max_pages=20, max_discovery=2000, enable_deep_crawl
         [item['url'] for item in no_priority]
     )
     
+    # Phase 3: AI URL Filtering (Optional - Smart prioritization)
+    if enable_ai_url_filter:
+        print(f"\n{'='*70}")
+        print(f"PHASE 3: AI URL PRIORITIZATION (SMART FILTER)")
+        print(f"{'='*70}")
+        
+        try:
+            from ai_extractor import AIContactExtractor
+            
+            # Use provided AI extractor or create new one
+            if ai_extractor is None:
+                ai_extractor = AIContactExtractor()
+                print("  (Using new AI extractor instance)")
+            
+            if ai_extractor.enabled:
+                # Analyze uncertain URLs (medium + low + no priority)
+                uncertain_urls = (
+                    [item for item in medium_priority] +
+                    [item for item in low_priority] +
+                    [item for item in no_priority]
+                )
+                
+                if uncertain_urls:
+                    print(f"Analyzing {len(uncertain_urls)} medium/low confidence URLs with AI...")
+                    print(f"(High-confidence URLs with score >= 60 skip AI analysis)")
+                    
+                    # Get just the URLs
+                    urls_to_analyze = [item['url'] for item in uncertain_urls]
+                    
+                    # AI batch analysis
+                    ai_results = ai_extractor.analyze_urls_for_contacts(urls_to_analyze)
+                    
+                    if ai_results:
+                        print(f"✓ AI analyzed {len(ai_results)} URLs")
+                        
+                        # Update scores based on AI predictions
+                        ai_scores_map = {r['url']: r for r in ai_results}
+                        
+                        upgraded_urls = []
+                        downgraded_urls = []
+                        
+                        for item in uncertain_urls:
+                            url = item['url']
+                            if url in ai_scores_map:
+                                ai_score = ai_scores_map[url]
+                                ai_likelihood = ai_score.get('likelihood', 0)
+                                
+                                # Convert AI likelihood (0-1) to score (0-100) and boost
+                                ai_boost = int(ai_likelihood * 100)
+                                old_score = item['score']
+                                item['score'] = max(old_score, ai_boost)  # Take higher score
+                                item['ai_likelihood'] = ai_likelihood
+                                item['ai_reason'] = ai_score.get('reason', '')
+                                
+                                # Track significant changes
+                                if ai_likelihood >= 0.7 and old_score < 60:
+                                    upgraded_urls.append(f"{url[:60]}... (AI: {ai_likelihood:.2f})")
+                                elif ai_likelihood < 0.3 and old_score >= 40:
+                                    downgraded_urls.append(f"{url[:60]}... (AI: {ai_likelihood:.2f})")
+                        
+                        # Re-sort all URLs by updated scores
+                        all_items = high_priority + uncertain_urls
+                        all_items.sort(key=lambda x: x['score'], reverse=True)
+                        
+                        # Show AI filtering results
+                        print(f"\nAI Filtering Results:")
+                        print(f"  ↑ Upgraded: {len(upgraded_urls)} URLs")
+                        print(f"  ↓ Downgraded: {len(downgraded_urls)} URLs")
+                        
+                        if upgraded_urls:
+                            print(f"\n  Top upgraded URLs:")
+                            for url in upgraded_urls[:3]:
+                                print(f"    {url}")
+                        
+                        # Update prioritized_urls with re-sorted list
+                        prioritized_urls = [item['url'] for item in all_items]
+                        
+                        # Show AI cost
+                        usage = ai_extractor.get_usage_stats()
+                        url_analysis_cost = usage['url_analysis']['cost']
+                        print(f"\n  AI URL Analysis Cost: ${url_analysis_cost:.6f}")
+                        print(f"  Tokens used: {usage['url_analysis']['tokens']:,}")
+                        
+                    else:
+                        print("  ⚠️  AI analysis returned no results, using keyword scores")
+                else:
+                    print("No uncertain URLs to analyze (all are high-confidence)")
+            else:
+                print("⚠️  AI extraction not available, using keyword-based prioritization only")
+                
+        except Exception as e:
+            print(f"⚠️  AI URL filtering failed: {e}")
+            print("Continuing with keyword-based prioritization...")
+        
+        print(f"{'='*70}\n")
+    
     # Return top max_pages URLs
     final_urls = prioritized_urls[:max_pages]
     
-    print(f"Returning top {len(final_urls)} URLs for scraping")
-    print(f"  - High priority: {min(len(high_priority), max_pages)}")
-    print(f"  - Medium priority: {min(len(medium_priority), max(0, max_pages - len(high_priority)))}")
+    print(f"Returning top {len(final_urls)} URLs for scraping from {len(prioritized_urls)} discovered.")
+    if enable_ai_url_filter:
+        print(f"  (AI-enhanced prioritization applied)")
+    else:
+        print(f"  (Keyword-based prioritization only)")
     print(f"{'='*70}\n")
     
-    return final_urls
+    return final_urls, len(prioritized_urls)
 
 
 def main():
@@ -1168,9 +1362,20 @@ def main():
         print("  --workers=N       Number of parallel workers (default: 20, max: 30)")
         print("  --deep-crawl[=N]  Enable deep crawling with N API requests (default: 50)")
         print("  --direct          Skip URL discovery, scrape the provided URL directly")
+        print("  --use-ai          Enable AI-powered name extraction (requires OpenRouter API key)")
+        print("  --no-ai           Disable AI extraction (use only heuristics)")
+        print("  --ai-model=MODEL  AI model to use (default: openai/gpt-4o-mini)")
+        print("  --ai-url-filter   Enable AI URL prioritization (smart filtering)")
+        print("  --no-url-filter   Disable AI URL filtering (keyword-based only)")
+        print("\nAI Models:")
+        print("  openai/gpt-4o-mini              Fast, cheap, accurate (recommended)")
+        print("  anthropic/claude-3-haiku        Good for complex text")
+        print("  meta-llama/llama-3.1-8b-instruct Free tier available")
+        print("  google/gemini-flash-1.5         Fast and free")
         print("\nNotes:")
         print("  - Sitemap & pattern discovery: ALWAYS enabled (fast, no API cost)")
         print("  - Deep crawling: OPTIONAL (uses API calls, finds hidden pages)")
+        print("  - AI extraction: Uses OpenRouter API (set OPENROUTER_API_KEY env var)")
         print("  - Your Oxylabs plan supports 40 requests/second")
         sys.exit(1)
     
@@ -1179,6 +1384,25 @@ def main():
     max_pages = int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2].isdigit() else 20
     save_html = '--save-html' in sys.argv
     skip_discovery = '--direct' in sys.argv
+    
+    # Parse AI arguments
+    use_ai = True  # Default: enabled if API key is available
+    if '--no-ai' in sys.argv:
+        use_ai = False
+    elif '--use-ai' in sys.argv:
+        use_ai = True
+    
+    # Parse AI URL filter arguments
+    enable_ai_url_filter = False  # Default: disabled (opt-in feature)
+    if '--ai-url-filter' in sys.argv:
+        enable_ai_url_filter = True
+    elif '--no-url-filter' in sys.argv:
+        enable_ai_url_filter = False
+    
+    ai_model = "openai/gpt-4o-mini"  # Default model
+    for arg in sys.argv:
+        if arg.startswith('--ai-model='):
+            ai_model = arg.split('=', 1)[1]
     
     # Parse workers argument
     max_workers = 20  # Default (safe for 40 req/s)
@@ -1208,8 +1432,8 @@ def main():
     username = "mcruwan_6Grof"
     password = "NewAdmin_123"
     
-    # Initialize Oxylabs scraper
-    scraper = OxylabsScraper(username, password)
+    # Initialize Oxylabs scraper with AI support
+    scraper = OxylabsScraper(username, password, use_ai=use_ai, ai_model=ai_model)
     scraper.save_html = save_html  # Pass the save_html flag
     
     # Decide whether to discover URLs or scrape directly
@@ -1223,8 +1447,14 @@ def main():
     else:
         # Discover URLs to scrape from the main site
         print(f"Discovering URLs from: {target_url}")
-        urls_to_scrape = discover_urls(target_url, max_pages, enable_deep_crawl=enable_deep_crawl, deep_crawl_requests=deep_crawl_requests)
-        print(f"Found {len(urls_to_scrape)} URLs to scrape")
+        urls_to_scrape, total_discovered = discover_urls(
+            target_url, 
+            max_pages, 
+            enable_deep_crawl=enable_deep_crawl, 
+            deep_crawl_requests=deep_crawl_requests,
+            enable_ai_url_filter=enable_ai_url_filter
+        )
+        print(f"Found {len(urls_to_scrape)} URLs to scrape from {total_discovered} discovered.")
     
     print("=" * 70)
     print("Oxylabs Web Scraper API Integration - Full Site Crawl")
@@ -1235,7 +1465,9 @@ def main():
     print(f"URLs to scrape: {len(urls_to_scrape)}")
     print(f"Parallel workers: {max_workers}")
     print(f"Deep crawling: {'ENABLED (' + str(deep_crawl_requests) + ' requests)' if enable_deep_crawl else 'DISABLED'}")
+    print(f"AI URL Filter: {'ENABLED' if enable_ai_url_filter else 'DISABLED'}")
     print(f"IP Rotation: ENABLED (random country per request)")
+    print(f"AI Extraction: {'ENABLED (' + ai_model + ')' if scraper.use_ai else 'DISABLED'}")
     print("=" * 70)
     
     # Start scraping
