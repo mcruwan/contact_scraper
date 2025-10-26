@@ -34,7 +34,17 @@ scraping_state = {
     'start_time': None,
     'elapsed_time': 0,
     'avg_speed': 0,
-    'activity_log': []
+    'activity_log': [],
+    'ai_stats': {
+        'enabled': False,
+        'model': '',
+        'total_calls': 0,
+        'successful': 0,
+        'total_tokens': 0,
+        'input_tokens': 0,
+        'output_tokens': 0,
+        'total_cost': 0.0
+    }
 }
 
 # Queue for progress updates
@@ -110,7 +120,7 @@ class ProgressTracker:
         self.current += 1
 
 
-def run_scraper_thread(url, max_pages, workers, enable_deep_crawl, deep_crawl_requests):
+def run_scraper_thread(url, max_pages, workers, enable_deep_crawl, deep_crawl_requests, enable_ai_url_filter=False, use_ai=True, ai_model='openai/gpt-4o-mini'):
     """Run the scraper in a background thread"""
     global scraping_state
     
@@ -131,38 +141,56 @@ def run_scraper_thread(url, max_pages, workers, enable_deep_crawl, deep_crawl_re
         scraping_state['elapsed_time'] = 0
         scraping_state['avg_speed'] = 0
         scraping_state['activity_log'] = []
+        scraping_state['ai_stats'] = {
+            'enabled': use_ai,
+            'model': ai_model if use_ai else '',
+            'total_calls': 0,
+            'successful': 0,
+            'total_tokens': 0,
+            'input_tokens': 0,
+            'output_tokens': 0,
+            'total_cost': 0.0
+        }
         
         # Initialize tracker
         tracker = ProgressTracker()
         
-        # Update status - discovering URLs
-        tracker.update('Discovering URLs...', urls_discovered=0, contacts_found=0)
-        scraping_state['progress'] = 10
+        # Update status - initializing
+        tracker.update('Initializing scraper...', urls_discovered=0, contacts_found=0)
+        scraping_state['progress'] = 5
         
         # Import the discover_urls function and scraper class
         from oxylabs_integration import discover_urls, OxylabsScraper
         
-        # Discover URLs
-        discovered_urls = discover_urls(
+        # Initialize scraper with credentials and AI support (create FIRST for shared AI extractor)
+        scraper = OxylabsScraper("mcruwan_6Grof", "NewAdmin_123", use_ai=use_ai, ai_model=ai_model)
+        
+        # Update status - discovering URLs
+        tracker.update('Discovering URLs...', urls_discovered=0, contacts_found=0)
+        scraping_state['progress'] = 10
+        scraping_state['total_urls_discovered'] = 0
+        
+        # Discover URLs (pass scraper's AI extractor for shared stats tracking)
+        urls_to_scrape, total_discovered = discover_urls(
             url, 
             max_pages=max_pages,
             enable_deep_crawl=enable_deep_crawl,
-            deep_crawl_requests=deep_crawl_requests
+            deep_crawl_requests=deep_crawl_requests,
+            enable_ai_url_filter=enable_ai_url_filter,
+            ai_extractor=scraper.ai_extractor if enable_ai_url_filter else None
         )
         
-        tracker.update(f'Found {len(discovered_urls)} URLs to scrape', urls_discovered=len(discovered_urls))
+        tracker.update(f'Found {len(urls_to_scrape)} URLs to scrape from {total_discovered} discovered', urls_discovered=len(urls_to_scrape))
+        scraping_state['total_urls_discovered'] = total_discovered
         scraping_state['progress'] = 20
         
-        # Initialize scraper with credentials
-        scraper = OxylabsScraper("mcruwan_6Grof", "NewAdmin_123")
-        
         # Update status - starting scraping
-        tracker.update('Starting parallel scraping...', urls_discovered=len(discovered_urls))
+        tracker.update('Starting parallel scraping...', urls_discovered=len(urls_to_scrape))
         scraping_state['progress'] = 25
         
         # Scrape URLs using the scraper's method
         # Note: scrape_multiple_urls saves files internally and returns raw contacts
-        results = scraper.scrape_multiple_urls(discovered_urls, max_workers=workers)
+        results = scraper.scrape_multiple_urls(urls_to_scrape, max_workers=workers)
         
         scraping_state['progress'] = 90
         
@@ -186,9 +214,21 @@ def run_scraper_thread(url, max_pages, workers, enable_deep_crawl, deep_crawl_re
         
         scraping_state['contacts_found'] = contacts_found
         
+        # Get AI usage statistics
+        if scraper.use_ai and scraper.ai_extractor:
+            usage_stats = scraper.ai_extractor.get_usage_stats()
+            scraping_state['ai_stats'].update({
+                'total_calls': scraper.ai_extractions_count,
+                'successful': scraper.ai_success_count,
+                'total_tokens': usage_stats.get('total_tokens', 0),
+                'input_tokens': usage_stats.get('input_tokens', 0),
+                'output_tokens': usage_stats.get('output_tokens', 0),
+                'total_cost': usage_stats.get('total_cost', 0.0)
+            })
+        
         # Complete
         tracker.update(f'✓ Complete! Found {contacts_found} contacts', 
-                      urls_discovered=len(discovered_urls), 
+                      urls_discovered=len(urls_to_scrape), 
                       contacts_found=contacts_found)
         scraping_state['progress'] = 100
         
@@ -231,6 +271,9 @@ def start_scraping():
     workers = int(data.get('workers', 30))
     enable_deep_crawl = data.get('enable_deep_crawl', False)
     deep_crawl_requests = int(data.get('deep_crawl_requests', 50))
+    use_ai = data.get('use_ai', True)
+    ai_model = data.get('ai_model', 'openai/gpt-4o-mini')
+    enable_ai_url_filter = data.get('enable_ai_url_filter', False)
     
     # Validate ranges
     if max_pages < 1 or max_pages > 10000:
@@ -243,7 +286,7 @@ def start_scraping():
     # Start scraping in background thread
     thread = threading.Thread(
         target=run_scraper_thread,
-        args=(url, max_pages, workers, enable_deep_crawl, deep_crawl_requests)
+        args=(url, max_pages, workers, enable_deep_crawl, deep_crawl_requests, enable_ai_url_filter, use_ai, ai_model)
     )
     thread.daemon = True
     thread.start()
@@ -333,5 +376,6 @@ if __name__ == '__main__':
     print("Open your browser and go to: http://localhost:5000")
     print("\n" + "="*70 + "\n")
     
-    app.run(debug=True, threaded=True, port=5000)
+    # Disable debug mode to prevent auto-reload interrupting scraping threads
+    app.run(debug=False, threaded=True, port=5000)
 

@@ -20,6 +20,7 @@ document.addEventListener('DOMContentLoaded', function() {
 // Start scraping
 async function startScraping(event) {
     event.preventDefault();
+    console.log('Start scraping button clicked');
     
     if (isRunning) {
         showError('Scraping is already in progress');
@@ -32,6 +33,9 @@ async function startScraping(event) {
     const workers = parseInt(document.getElementById('workers').value);
     const enableDeepCrawl = document.getElementById('enableDeepCrawl').checked;
     const deepCrawlRequests = parseInt(document.getElementById('deepCrawlRequests').value);
+    const enableAiUrlFilter = document.getElementById('enableAiUrlFilter').checked;
+    
+    console.log('Form values:', { url, maxPages, workers, enableDeepCrawl, deepCrawlRequests });
     
     // Validate URL
     if (!url) {
@@ -45,7 +49,8 @@ async function startScraping(event) {
         max_pages: maxPages,
         workers: workers,
         enable_deep_crawl: enableDeepCrawl,
-        deep_crawl_requests: deepCrawlRequests
+        deep_crawl_requests: deepCrawlRequests,
+        enable_ai_url_filter: enableAiUrlFilter
     };
     
     try {
@@ -126,7 +131,7 @@ async function checkStatus() {
         // Update UI with status
         updateProgress(status.progress);
         updateStatus(status.status, status.progress);
-        updateStats(status.urls_discovered, status.contacts_found);
+        updateQuickStats(status);
         updateDetailedStats(status);
         
         if (status.current_url) {
@@ -135,6 +140,11 @@ async function checkStatus() {
         
         if (status.activity_log && status.activity_log.length > 0) {
             updateActivityFeed(status.activity_log);
+        }
+        
+        // Update AI stats if available
+        if (status.ai_stats && status.ai_stats.enabled) {
+            updateAIStats(status.ai_stats);
         }
         
         if (status.error) {
@@ -293,9 +303,67 @@ function updateCurrentUrl(url) {
 }
 
 // Update statistics
-function updateStats(urls, contacts) {
-    document.getElementById('statsUrls').textContent = urls;
-    document.getElementById('statsContacts').textContent = contacts;
+function updateQuickStats(status) {
+    const urlsToScrape = status.urls_discovered || 0;
+    const totalDiscovered = status.total_urls_discovered || 0;
+    const contacts = status.contacts_found || 0;
+
+    const statsUrls = document.getElementById('statsUrls');
+    
+    // Show "To Scrape / Discovered" format if we have both numbers
+    if (totalDiscovered > 0 && totalDiscovered > urlsToScrape) {
+        statsUrls.innerHTML = `${urlsToScrape.toLocaleString()} / <span class="text-muted small">${totalDiscovered.toLocaleString()}</span>`;
+    } else {
+        // Fallback to the simple number if they are the same or total is missing
+        statsUrls.textContent = urlsToScrape.toLocaleString();
+    }
+    
+    document.getElementById('statsContacts').textContent = contacts.toLocaleString();
+}
+
+// Update AI statistics
+function updateAIStats(aiStats) {
+    const aiStatsCard = document.getElementById('aiStatsCard');
+    const urlAnalysisSection = document.getElementById('urlAnalysisSection');
+    
+    // Check if we should show AI stats (contact extraction or URL analysis)
+    const hasContactStats = aiStats.enabled && aiStats.total_calls > 0;
+    const hasUrlAnalysis = aiStats.url_analysis && aiStats.url_analysis.requests > 0;
+    
+    if (!hasContactStats && !hasUrlAnalysis) {
+        aiStatsCard.style.display = 'none';
+        return;
+    }
+    
+    aiStatsCard.style.display = 'block';
+    
+    // Update model name
+    const modelName = aiStats.model ? aiStats.model.split('/').pop() : '-';  // Get last part of model name
+    document.getElementById('aiModel').textContent = modelName;
+    
+    // Update contact extraction stats
+    document.getElementById('aiCalls').textContent = aiStats.total_calls || 0;
+    
+    const successRate = aiStats.total_calls > 0 
+        ? ((aiStats.successful / aiStats.total_calls) * 100).toFixed(1)
+        : 0;
+    document.getElementById('aiSuccessRate').textContent = successRate + '%';
+    
+    // Update URL analysis stats (if available)
+    if (hasUrlAnalysis) {
+        urlAnalysisSection.style.display = 'block';
+        document.getElementById('urlAnalysisCalls').textContent = aiStats.url_analysis.requests || 0;
+        document.getElementById('urlAnalysisTokens').textContent = (aiStats.url_analysis.tokens || 0).toLocaleString();
+    } else {
+        urlAnalysisSection.style.display = 'none';
+    }
+    
+    // Update total tokens and cost (includes both contact extraction and URL analysis)
+    const totalTokens = aiStats.total_tokens || 0;
+    document.getElementById('aiTokens').textContent = totalTokens.toLocaleString();
+    
+    const totalCost = aiStats.total_cost || 0;
+    document.getElementById('aiCost').textContent = totalCost.toFixed(6);
 }
 
 // Update detailed statistics
